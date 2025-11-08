@@ -1,4 +1,5 @@
 mod git;
+mod syntax;
 mod ui;
 
 use anyhow::Result;

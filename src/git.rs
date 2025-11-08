@@ -115,10 +115,18 @@ fn parse_commit_diff(output: &str) -> CommitDiff {
     let lines: Vec<&str> = output.lines().collect();
     let mut files = Vec::new();
     let mut current_file: Option<FileDiff> = None;
+    let mut found_first_diff = false;
 
     for line in lines {
+        // Skip everything before the first "diff --git" line
+        if !found_first_diff && !line.starts_with("diff --git") {
+            continue;
+        }
+
         // Detect start of a new file diff
         if line.starts_with("diff --git") {
+            found_first_diff = true;
+
             // Save the previous file diff if exists
             if let Some(file_diff) = current_file.take() {
                 files.push(file_diff);
@@ -138,10 +146,17 @@ fn parse_commit_diff(output: &str) -> CommitDiff {
             });
         }
 
-        // Add line to current file
+        // Add line to current file (skip the "diff --git" line itself and metadata)
         if let Some(ref mut file_diff) = current_file {
-            file_diff.diff_content.push_str(line);
-            file_diff.diff_content.push('\n');
+            // Skip diff metadata lines, only keep the actual diff content
+            if !line.starts_with("diff --git")
+                && !line.starts_with("index ")
+                && !line.starts_with("--- ")
+                && !line.starts_with("+++ ")
+            {
+                file_diff.diff_content.push_str(line);
+                file_diff.diff_content.push('\n');
+            }
         }
     }
 
@@ -150,11 +165,11 @@ fn parse_commit_diff(output: &str) -> CommitDiff {
         files.push(file_diff);
     }
 
-    // If no files were found, put everything in a single "diff"
+    // If no files were found, show a message
     if files.is_empty() {
         files.push(FileDiff {
-            filename: "(complete diff)".to_string(),
-            diff_content: output.to_string(),
+            filename: "(no changes)".to_string(),
+            diff_content: "No file changes in this commit.\n".to_string(),
         });
     }
 

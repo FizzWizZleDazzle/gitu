@@ -1,4 +1,5 @@
 use crate::git::{get_commit_diff, Commit, CommitDiff};
+use crate::syntax;
 use anyhow::Result;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -260,37 +261,18 @@ fn render_diff(f: &mut Frame, app: &App, area: Rect) {
     if let Some(ref commit_diff) = app.current_diff {
         let selected_file_index = app.file_list_state.selected().unwrap_or(0);
 
-        let diff_content = if let Some(file_diff) = commit_diff.files.get(selected_file_index) {
-            &file_diff.diff_content
-        } else {
-            ""
-        };
+        let file_diff = commit_diff.files.get(selected_file_index);
+        let diff_content = file_diff.map(|f| f.diff_content.as_str()).unwrap_or("");
+        let filename = file_diff.map(|f| f.filename.as_str()).unwrap_or("");
 
-        let diff_lines: Vec<Line> = diff_content
-            .lines()
+        // Apply syntax highlighting to the diff
+        let all_highlighted_lines = syntax::highlight_diff(diff_content, filename);
+
+        // Apply scroll offset
+        let diff_lines: Vec<Line> = all_highlighted_lines
+            .into_iter()
             .skip(app.diff_scroll as usize)
-            .map(|line| {
-                let style = if line.starts_with('+') && !line.starts_with("+++") {
-                    Style::default().fg(Color::Green)
-                } else if line.starts_with('-') && !line.starts_with("---") {
-                    Style::default().fg(Color::Red)
-                } else if line.starts_with("@@") {
-                    Style::default().fg(Color::Cyan)
-                } else if line.starts_with("diff --git") || line.starts_with("index ") {
-                    Style::default().fg(Color::Yellow)
-                } else {
-                    Style::default()
-                };
-
-                Line::from(Span::styled(line, style))
-            })
             .collect();
-
-        let filename = commit_diff
-            .files
-            .get(selected_file_index)
-            .map(|f| f.filename.as_str())
-            .unwrap_or("");
 
         let title = format!(" {} ", filename);
         let help = " ↑/↓: Scroll | ESC: Close ";
