@@ -8,6 +8,17 @@ pub struct Commit {
     pub message: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct FileDiff {
+    pub filename: String,
+    pub diff_content: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CommitDiff {
+    pub files: Vec<FileDiff>,
+}
+
 /// Parses git log output and returns a vector of commits
 pub fn get_commits() -> Result<Vec<Commit>> {
     let output = Command::new("git")
@@ -83,8 +94,8 @@ fn parse_log_output(output: &str) -> Vec<Commit> {
     commits
 }
 
-/// Gets the full diff for a specific commit
-pub fn get_commit_diff(hash: &str) -> Result<String> {
+/// Gets the full diff for a specific commit, split by files
+pub fn get_commit_diff(hash: &str) -> Result<CommitDiff> {
     let output = Command::new("git")
         .args(["show", "--color=never", hash])
         .output()
@@ -95,7 +106,59 @@ pub fn get_commit_diff(hash: &str) -> Result<String> {
         anyhow::bail!("Git show failed: {}", error);
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let full_output = String::from_utf8_lossy(&output.stdout).to_string();
+    Ok(parse_commit_diff(&full_output))
+}
+
+/// Parses the git show output into structured file diffs
+fn parse_commit_diff(output: &str) -> CommitDiff {
+    let lines: Vec<&str> = output.lines().collect();
+    let mut files = Vec::new();
+    let mut current_file: Option<FileDiff> = None;
+
+    for line in lines {
+        // Detect start of a new file diff
+        if line.starts_with("diff --git") {
+            // Save the previous file diff if exists
+            if let Some(file_diff) = current_file.take() {
+                files.push(file_diff);
+            }
+
+            // Extract filename from "diff --git a/file b/file"
+            let filename = line
+                .split_whitespace()
+                .nth(2)
+                .unwrap_or("unknown")
+                .trim_start_matches("a/")
+                .to_string();
+
+            current_file = Some(FileDiff {
+                filename,
+                diff_content: String::new(),
+            });
+        }
+
+        // Add line to current file
+        if let Some(ref mut file_diff) = current_file {
+            file_diff.diff_content.push_str(line);
+            file_diff.diff_content.push('\n');
+        }
+    }
+
+    // Don't forget the last file
+    if let Some(file_diff) = current_file {
+        files.push(file_diff);
+    }
+
+    // If no files were found, put everything in a single "diff"
+    if files.is_empty() {
+        files.push(FileDiff {
+            filename: "(complete diff)".to_string(),
+            diff_content: output.to_string(),
+        });
+    }
+
+    CommitDiff { files }
 }
 
 #[cfg(test)]

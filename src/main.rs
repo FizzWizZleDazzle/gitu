@@ -82,6 +82,16 @@ fn run_app<B: ratatui::backend::Backend>(
                             app.previous();
                         }
                     }
+                    KeyCode::Left | KeyCode::Char('h') => {
+                        if app.show_diff {
+                            app.previous_file();
+                        }
+                    }
+                    KeyCode::Right | KeyCode::Char('l') => {
+                        if app.show_diff {
+                            app.next_file();
+                        }
+                    }
                     KeyCode::Enter => app.toggle_diff()?,
                     _ => {}
                 }
