@@ -24,9 +24,12 @@ pub enum MessageType {
 }
 
 pub struct App {
+    // Panel system
+    pub current_panel: Panel,
+
+    // Log panel (existing functionality)
     pub commits: Vec<Commit>,
     pub list_state: ListState,
-    pub should_quit: bool,
     pub show_diff: bool,
     pub current_diff: Option<CommitDiff>,
     pub diff_scroll: u16,
@@ -36,6 +39,19 @@ pub struct App {
     pub active_filter: Option<SearchFilter>,
     pub tree_view_mode: bool,
     pub tree_file_selected: bool,
+
+    // Status panel
+    pub status_files: Vec<StatusFile>,
+    pub status_list_state: ListState,
+    pub commit_message_mode: bool,
+    pub commit_message_input: String,
+
+    // Stash panel
+    pub stashes: Vec<StashEntry>,
+    pub stash_list_state: ListState,
+
+    // Common
+    pub should_quit: bool,
     pub branch_input_mode: bool,
     pub branch_name_input: String,
     pub status_message: Option<String>,
@@ -49,10 +65,26 @@ impl App {
             list_state.select(Some(0));
         }
 
+        // Try to load status and stash data
+        let status_files = crate::git::get_status().unwrap_or_default();
+        let stashes = crate::git::get_stashes().unwrap_or_default();
+
+        let mut status_list_state = ListState::default();
+        if !status_files.is_empty() {
+            status_list_state.select(Some(0));
+        }
+
+        let mut stash_list_state = ListState::default();
+        if !stashes.is_empty() {
+            stash_list_state.select(Some(0));
+        }
+
         Self {
+            current_panel: Panel::Status,
+
+            // Log panel
             commits,
             list_state,
-            should_quit: false,
             show_diff: false,
             current_diff: None,
             diff_scroll: 0,
@@ -62,6 +94,19 @@ impl App {
             active_filter: None,
             tree_view_mode: false,
             tree_file_selected: false,
+
+            // Status panel
+            status_files,
+            status_list_state,
+            commit_message_mode: false,
+            commit_message_input: String::new(),
+
+            // Stash panel
+            stashes,
+            stash_list_state,
+
+            // Common
+            should_quit: false,
             branch_input_mode: false,
             branch_name_input: String::new(),
             status_message: None,
@@ -444,80 +489,264 @@ impl App {
             }
         }
     }
+
+    // Panel navigation
+    pub fn switch_to_panel(&mut self, panel: Panel) {
+        self.current_panel = panel;
+    }
+
+    pub fn refresh_status(&mut self) {
+        match crate::git::get_status() {
+            Ok(files) => {
+                self.status_files = files;
+                let mut state = ListState::default();
+                if !self.status_files.is_empty() {
+                    state.select(Some(0));
+                }
+                self.status_list_state = state;
+            }
+            Err(e) => self.set_status(format!("Failed to refresh status: {}", e), MessageType::Error),
+        }
+    }
+
+    pub fn refresh_stashes(&mut self) {
+        match crate::git::get_stashes() {
+            Ok(stashes) => {
+                self.stashes = stashes;
+                let mut state = ListState::default();
+                if !self.stashes.is_empty() {
+                    state.select(Some(0));
+                }
+                self.stash_list_state = state;
+            }
+            Err(e) => self.set_status(format!("Failed to refresh stashes: {}", e), MessageType::Error),
+        }
+    }
+
+    // Status panel operations
+    pub fn next_status_file(&mut self) {
+        if self.status_files.is_empty() {
+            return;
+        }
+        let i = match self.status_list_state.selected() {
+            Some(i) if i >= self.status_files.len() - 1 => 0,
+            Some(i) => i + 1,
+            None => 0,
+        };
+        self.status_list_state.select(Some(i));
+    }
+
+    pub fn previous_status_file(&mut self) {
+        if self.status_files.is_empty() {
+            return;
+        }
+        let i = match self.status_list_state.selected() {
+            Some(i) if i == 0 => self.status_files.len() - 1,
+            Some(i) => i - 1,
+            None => 0,
+        };
+        self.status_list_state.select(Some(i));
+    }
+
+    pub fn toggle_stage(&mut self) {
+        if let Some(index) = self.status_list_state.selected() {
+            if let Some(file) = self.status_files.get(index) {
+                let result = if file.staged {
+                    crate::git::unstage_file(&file.path)
+                } else {
+                    crate::git::stage_file(&file.path)
+                };
+
+                match result {
+                    Ok(msg) => {
+                        self.set_status(msg, MessageType::Success);
+                        self.refresh_status();
+                    }
+                    Err(e) => self.set_status(format!("Error: {}", e), MessageType::Error),
+                }
+            }
+        }
+    }
+
+    pub fn stage_all_files(&mut self) {
+        match crate::git::stage_all() {
+            Ok(msg) => {
+                self.set_status(msg, MessageType::Success);
+                self.refresh_status();
+            }
+            Err(e) => self.set_status(format!("Error: {}", e), MessageType::Error),
+        }
+    }
+
+    pub fn unstage_all_files(&mut self) {
+        match crate::git::unstage_all() {
+            Ok(msg) => {
+                self.set_status(msg, MessageType::Success);
+                self.refresh_status();
+            }
+            Err(e) => self.set_status(format!("Error: {}", e), MessageType::Error),
+        }
+    }
+
+    pub fn enter_commit_message_mode(&mut self) {
+        self.commit_message_mode = true;
+        self.commit_message_input.clear();
+    }
+
+    pub fn exit_commit_message_mode(&mut self) {
+        self.commit_message_mode = false;
+    }
+
+    pub fn add_commit_char(&mut self, c: char) {
+        self.commit_message_input.push(c);
+    }
+
+    pub fn delete_commit_char(&mut self) {
+        self.commit_message_input.pop();
+    }
+
+    pub fn execute_commit(&mut self) {
+        if self.commit_message_input.is_empty() {
+            self.set_status("Commit message cannot be empty".to_string(), MessageType::Error);
+            self.commit_message_mode = false;
+            return;
+        }
+
+        match crate::git::commit(&self.commit_message_input) {
+            Ok(msg) => {
+                self.set_status(msg, MessageType::Success);
+                self.commit_message_mode = false;
+                self.refresh_status();
+            }
+            Err(e) => {
+                self.set_status(format!("Error: {}", e), MessageType::Error);
+                self.commit_message_mode = false;
+            }
+        }
+    }
+
+    // Stash panel operations
+    pub fn next_stash(&mut self) {
+        if self.stashes.is_empty() {
+            return;
+        }
+        let i = match self.stash_list_state.selected() {
+            Some(i) if i >= self.stashes.len() - 1 => 0,
+            Some(i) => i + 1,
+            None => 0,
+        };
+        self.stash_list_state.select(Some(i));
+    }
+
+    pub fn previous_stash(&mut self) {
+        if self.stashes.is_empty() {
+            return;
+        }
+        let i = match self.stash_list_state.selected() {
+            Some(i) if i == 0 => self.stashes.len() - 1,
+            Some(i) => i - 1,
+            None => 0,
+        };
+        self.stash_list_state.select(Some(i));
+    }
+
+    pub fn apply_selected_stash(&mut self) {
+        if let Some(index) = self.stash_list_state.selected() {
+            if let Some(stash) = self.stashes.get(index) {
+                match crate::git::apply_stash(stash.index) {
+                    Ok(msg) => {
+                        self.set_status(msg, MessageType::Success);
+                        self.refresh_status();
+                    }
+                    Err(e) => self.set_status(format!("Error: {}", e), MessageType::Error),
+                }
+            }
+        }
+    }
+
+    pub fn pop_selected_stash(&mut self) {
+        if let Some(index) = self.stash_list_state.selected() {
+            if let Some(stash) = self.stashes.get(index) {
+                match crate::git::pop_stash(stash.index) {
+                    Ok(msg) => {
+                        self.set_status(msg, MessageType::Success);
+                        self.refresh_status();
+                        self.refresh_stashes();
+                    }
+                    Err(e) => self.set_status(format!("Error: {}", e), MessageType::Error),
+                }
+            }
+        }
+    }
+
+    pub fn drop_selected_stash(&mut self) {
+        if let Some(index) = self.stash_list_state.selected() {
+            if let Some(stash) = self.stashes.get(index) {
+                match crate::git::drop_stash(stash.index) {
+                    Ok(msg) => {
+                        self.set_status(msg, MessageType::Success);
+                        self.refresh_stashes();
+                    }
+                    Err(e) => self.set_status(format!("Error: {}", e), MessageType::Error),
+                }
+            }
+        }
+    }
 }
 
 pub fn ui(f: &mut Frame, app: &mut App) {
-    // Split vertically for status message, main area, and input prompts
-    let root_chunks = if app.status_message.is_some() {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(1),  // Status message
-                Constraint::Min(3),     // Main area
-                Constraint::Length(if app.search_mode || app.branch_input_mode { 3 } else { 0 }),
-            ])
-            .split(f.area())
-    } else {
-        Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Min(3),     // Main area
-                Constraint::Length(if app.search_mode || app.branch_input_mode { 3 } else { 0 }),
-            ])
-            .split(f.area())
-    };
+    // Calculate constraints based on what needs to be shown
+    let has_status_msg = app.status_message.is_some();
+    let has_input = app.search_mode || app.branch_input_mode || app.commit_message_mode;
 
-    let (status_area, main_area, input_area) = if app.status_message.is_some() {
-        (Some(root_chunks[0]), root_chunks[1], if root_chunks.len() > 2 { Some(root_chunks[2]) } else { None })
-    } else {
-        (None, root_chunks[0], if root_chunks.len() > 1 { Some(root_chunks[1]) } else { None })
-    };
-
-    // Split main area horizontally based on view mode
-    let chunks = if app.tree_view_mode {
-        // Tree view mode: 2-pane layout [commits | files or diff]
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
-            .split(main_area)
-    } else if app.show_diff {
-        // Normal diff view: 3-pane layout [commits | files | diff]
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(30),
-                Constraint::Percentage(25),
-                Constraint::Percentage(45),
-            ])
-            .split(main_area)
-    } else {
-        // Commit list only
-        Layout::default()
-            .direction(Direction::Horizontal)
-            .constraints([Constraint::Percentage(100)])
-            .split(main_area)
-    };
-
-    render_commit_list(f, app, chunks[0]);
-
-    if app.tree_view_mode && chunks.len() >= 2 {
-        // Tree view mode
-        if app.tree_file_selected {
-            // Showing selected file's diff full-width
-            render_tree_file_diff(f, app, chunks[1]);
-        } else {
-            // Showing file list full-width
-            render_tree_file_list(f, app, chunks[1]);
-        }
-    } else if app.show_diff && chunks.len() >= 3 {
-        // Normal diff view (3-pane)
-        render_file_list(f, app, chunks[1]);
-        render_diff(f, app, chunks[2]);
+    let mut constraints = vec![];
+    if has_status_msg {
+        constraints.push(Constraint::Length(1)); // Status message
+    }
+    constraints.push(Constraint::Length(1)); // Tab bar
+    constraints.push(Constraint::Min(3));    // Main content
+    if has_input {
+        constraints.push(Constraint::Length(3)); // Input prompt
     }
 
-    // Render status message if present
+    let root_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(f.area());
+
+    let mut chunk_idx = 0;
+    let status_area = if has_status_msg {
+        let area = root_chunks[chunk_idx];
+        chunk_idx += 1;
+        Some(area)
+    } else {
+        None
+    };
+
+    let tab_area = root_chunks[chunk_idx];
+    chunk_idx += 1;
+
+    let main_area = root_chunks[chunk_idx];
+    chunk_idx += 1;
+
+    let input_area = if has_input && chunk_idx < root_chunks.len() {
+        Some(root_chunks[chunk_idx])
+    } else {
+        None
+    };
+
+    // Render components
     if let Some(status_rect) = status_area {
         render_status_message(f, app, status_rect);
+    }
+
+    render_tab_bar(f, app, tab_area);
+
+    // Render appropriate panel
+    match app.current_panel {
+        Panel::Status => render_status_panel(f, app, main_area),
+        Panel::Log => render_log_panel(f, app, main_area),
+        Panel::Stash => render_stash_panel(f, app, main_area),
     }
 
     // Render input prompts
@@ -526,8 +755,205 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             render_search_input(f, app, input_rect);
         } else if app.branch_input_mode {
             render_branch_input(f, app, input_rect);
+        } else if app.commit_message_mode {
+            render_commit_message_input(f, app, input_rect);
         }
     }
+}
+
+fn render_tab_bar(f: &mut Frame, app: &App, area: Rect) {
+    let tabs = vec![
+        ("[1] Status", Panel::Status),
+        ("[2] Log", Panel::Log),
+        ("[3] Stash", Panel::Stash),
+    ];
+
+    let mut spans = Vec::new();
+    for (i, (label, panel)) in tabs.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" | "));
+        }
+
+        let style = if *panel == app.current_panel {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+
+        spans.push(Span::styled(label.to_string(), style));
+    }
+
+    let line = Line::from(spans);
+    f.render_widget(Paragraph::new(line), area);
+}
+
+fn render_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let (staged, unstaged): (Vec<&StatusFile>, Vec<&StatusFile>) =
+        app.status_files.iter().partition(|f| f.staged);
+
+    let items: Vec<ListItem> = {
+        let mut items = Vec::new();
+
+        if !staged.is_empty() {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "Staged Changes:",
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ))));
+
+            for file in &staged {
+                let status_char = match file.status {
+                    crate::git::FileStatus::Modified => "M",
+                    crate::git::FileStatus::Added => "A",
+                    crate::git::FileStatus::Deleted => "D",
+                    crate::git::FileStatus::Renamed => "R",
+                    crate::git::FileStatus::Untracked => "?",
+                };
+
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("[{}] ", status_char),
+                        Style::default().fg(Color::Green),
+                    ),
+                    Span::raw(&file.path),
+                ])));
+            }
+        }
+
+        if !unstaged.is_empty() {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "Unstaged Changes:",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ))));
+
+            for file in &unstaged {
+                let status_char = match file.status {
+                    crate::git::FileStatus::Modified => "M",
+                    crate::git::FileStatus::Added => "A",
+                    crate::git::FileStatus::Deleted => "D",
+                    crate::git::FileStatus::Renamed => "R",
+                    crate::git::FileStatus::Untracked => "?",
+                };
+
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled(
+                        format!("[{}] ", status_char),
+                        Style::default().fg(Color::Red),
+                    ),
+                    Span::raw(&file.path),
+                ])));
+            }
+        }
+
+        if items.is_empty() {
+            items.push(ListItem::new("No changes"));
+        }
+
+        items
+    };
+
+    let title = format!(" Status ({} files) ", app.status_files.len());
+    let help = " Space: Stage/Unstage | a: Stage all | u: Unstage all | c: Commit | q: Quit ";
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .title_bottom(help),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
+
+    f.render_stateful_widget(list, area, &mut app.status_list_state);
+}
+
+fn render_log_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    // Split based on view mode
+    let chunks = if app.tree_view_mode {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(area)
+    } else if app.show_diff {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(30),
+                Constraint::Percentage(25),
+                Constraint::Percentage(45),
+            ])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(100)])
+            .split(area)
+    };
+
+    render_commit_list(f, app, chunks[0]);
+
+    if app.tree_view_mode && chunks.len() >= 2 {
+        if app.tree_file_selected {
+            render_tree_file_diff(f, app, chunks[1]);
+        } else {
+            render_tree_file_list(f, app, chunks[1]);
+        }
+    } else if app.show_diff && chunks.len() >= 3 {
+        render_file_list(f, app, chunks[1]);
+        render_diff(f, app, chunks[2]);
+    }
+}
+
+fn render_stash_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let items: Vec<ListItem> = app
+        .stashes
+        .iter()
+        .map(|stash| {
+            let line = Line::from(vec![
+                Span::styled(
+                    format!("stash@{{{}}}", stash.index),
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" on "),
+                Span::styled(&stash.branch, Style::default().fg(Color::Cyan)),
+                Span::raw(": "),
+                Span::raw(&stash.message),
+            ]);
+            ListItem::new(line)
+        })
+        .collect();
+
+    let items = if items.is_empty() {
+        vec![ListItem::new("No stashes")]
+    } else {
+        items
+    };
+
+    let title = format!(" Stashes ({}) ", app.stashes.len());
+    let help = " a: Apply | p: Pop | d: Drop | q: Quit ";
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .title_bottom(help),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
+
+    f.render_stateful_widget(list, area, &mut app.stash_list_state);
 }
 
 fn render_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
@@ -750,6 +1176,34 @@ fn render_search_input(f: &mut Frame, app: &App, area: Rect) {
                 .title(format!(" {} ", search_type))
                 .title_bottom(help)
                 .border_style(Style::default().fg(Color::Yellow)),
+        );
+
+    f.render_widget(paragraph, area);
+}
+
+fn render_commit_message_input(f: &mut Frame, app: &App, area: Rect) {
+    let help = " Type commit message | Enter: Commit | Esc: Cancel ";
+
+    let input_text = if app.commit_message_input.is_empty() {
+        "Enter commit message...".to_string()
+    } else {
+        app.commit_message_input.clone()
+    };
+
+    let input_style = if app.commit_message_input.is_empty() {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let paragraph = Paragraph::new(input_text)
+        .style(input_style)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Commit Message ")
+                .title_bottom(help)
+                .border_style(Style::default().fg(Color::Green)),
         );
 
     f.render_widget(paragraph, area);

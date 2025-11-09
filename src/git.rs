@@ -22,7 +22,6 @@ pub struct StashEntry {
     pub index: usize,
     pub branch: String,
     pub message: String,
-    pub full_line: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -507,7 +506,6 @@ fn parse_stash_output(output: &str) -> Vec<StashEntry> {
             index,
             branch,
             message,
-            full_line: line.to_string(),
         });
     }
 

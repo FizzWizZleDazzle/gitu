@@ -83,6 +83,14 @@ fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Char(c) => app.add_branch_char(c),
                         _ => {}
                     }
+                } else if app.commit_message_mode {
+                    match key.code {
+                        KeyCode::Esc => app.exit_commit_message_mode(),
+                        KeyCode::Enter => app.execute_commit(),
+                        KeyCode::Backspace => app.delete_commit_char(),
+                        KeyCode::Char(c) => app.add_commit_char(c),
+                        _ => {}
+                    }
                 } else if app.tree_view_mode {
                     // Tree view mode
                     match key.code {
@@ -107,26 +115,15 @@ fn run_app<B: ratatui::backend::Backend>(
                         _ => {}
                     }
                 } else {
-                    // Normal mode
+                    // Normal mode - check which panel is active
+                    use ui::Panel;
+
+                    // Global keybindings (work in all panels)
                     match key.code {
                         KeyCode::Char('q') => app.quit(),
-                        KeyCode::Char('t') => app.toggle_tree_view()?,
-                        KeyCode::Char('/') => app.enter_search_mode(),
-                        KeyCode::Char('y') => {
-                            app.copy_commit_hash();
-                        }
-                        KeyCode::Char('c') => {
-                            app.checkout_selected_commit();
-                        }
-                        KeyCode::Char('b') => {
-                            app.enter_branch_input_mode();
-                        }
-                        KeyCode::Char('p') => {
-                            app.cherry_pick_commit();
-                        }
-                        KeyCode::Char('r') => {
-                            app.revert_selected_commit();
-                        }
+                        KeyCode::Char('1') => app.switch_to_panel(Panel::Status),
+                        KeyCode::Char('2') => app.switch_to_panel(Panel::Log),
+                        KeyCode::Char('3') => app.switch_to_panel(Panel::Stash),
                         KeyCode::Esc => {
                             if app.status_message.is_some() {
                                 app.clear_status();
@@ -136,32 +133,79 @@ fn run_app<B: ratatui::backend::Backend>(
                                 app.quit();
                             }
                         }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if app.show_diff {
-                                app.scroll_diff_down();
-                            } else {
-                                app.next();
+                        _ => {
+                            // Panel-specific keybindings
+                            match app.current_panel {
+                                Panel::Status => {
+                                    match key.code {
+                                        KeyCode::Char(' ') => app.toggle_stage(),
+                                        KeyCode::Char('a') => app.stage_all_files(),
+                                        KeyCode::Char('u') => app.unstage_all_files(),
+                                        KeyCode::Char('c') => app.enter_commit_message_mode(),
+                                        KeyCode::Down | KeyCode::Char('j') => app.next_status_file(),
+                                        KeyCode::Up | KeyCode::Char('k') => app.previous_status_file(),
+                                        _ => {}
+                                    }
+                                }
+                                Panel::Log => {
+                                    match key.code {
+                                        KeyCode::Char('t') => app.toggle_tree_view()?,
+                                        KeyCode::Char('/') => app.enter_search_mode(),
+                                        KeyCode::Char('y') => {
+                                            app.copy_commit_hash();
+                                        }
+                                        KeyCode::Char('c') => {
+                                            app.checkout_selected_commit();
+                                        }
+                                        KeyCode::Char('b') => {
+                                            app.enter_branch_input_mode();
+                                        }
+                                        KeyCode::Char('p') => {
+                                            app.cherry_pick_commit();
+                                        }
+                                        KeyCode::Char('r') => {
+                                            app.revert_selected_commit();
+                                        }
+                                        KeyCode::Down | KeyCode::Char('j') => {
+                                            if app.show_diff {
+                                                app.scroll_diff_down();
+                                            } else {
+                                                app.next();
+                                            }
+                                        }
+                                        KeyCode::Up | KeyCode::Char('k') => {
+                                            if app.show_diff {
+                                                app.scroll_diff_up();
+                                            } else {
+                                                app.previous();
+                                            }
+                                        }
+                                        KeyCode::Left | KeyCode::Char('h') => {
+                                            if app.show_diff {
+                                                app.previous_file();
+                                            }
+                                        }
+                                        KeyCode::Right | KeyCode::Char('l') => {
+                                            if app.show_diff {
+                                                app.next_file();
+                                            }
+                                        }
+                                        KeyCode::Enter => app.toggle_diff()?,
+                                        _ => {}
+                                    }
+                                }
+                                Panel::Stash => {
+                                    match key.code {
+                                        KeyCode::Char('a') => app.apply_selected_stash(),
+                                        KeyCode::Char('p') => app.pop_selected_stash(),
+                                        KeyCode::Char('d') => app.drop_selected_stash(),
+                                        KeyCode::Down | KeyCode::Char('j') => app.next_stash(),
+                                        KeyCode::Up | KeyCode::Char('k') => app.previous_stash(),
+                                        _ => {}
+                                    }
+                                }
                             }
                         }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if app.show_diff {
-                                app.scroll_diff_up();
-                            } else {
-                                app.previous();
-                            }
-                        }
-                        KeyCode::Left | KeyCode::Char('h') => {
-                            if app.show_diff {
-                                app.previous_file();
-                            }
-                        }
-                        KeyCode::Right | KeyCode::Char('l') => {
-                            if app.show_diff {
-                                app.next_file();
-                            }
-                        }
-                        KeyCode::Enter => app.toggle_diff()?,
-                        _ => {}
                     }
                 }
             }
