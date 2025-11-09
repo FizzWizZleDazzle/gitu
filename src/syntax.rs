@@ -104,22 +104,22 @@ fn highlight_line_with_diff_marker(
 
     let mut spans = Vec::new();
 
-    // Add the diff marker first
+    // Add the diff marker first with appropriate background
     let marker_style = match marker {
-        '+' => Style::default().fg(Color::Green),
-        '-' => Style::default().fg(Color::Red),
+        '+' => Style::default().fg(Color::Black).bg(Color::Green),
+        '-' => Style::default().fg(Color::Black).bg(Color::Red),
         _ => Style::default(),
     };
     spans.push(Span::styled(marker.to_string(), marker_style));
 
-    // Add syntax-highlighted code
+    // Add syntax-highlighted code with background highlight for additions/deletions
     for (style, text) in highlighted {
         let fg_color = syntect_to_ratatui_color(style.foreground);
 
-        // Override with diff colors for add/delete, but keep syntax colors for context
+        // Use background color for diff highlighting, preserve syntax foreground colors
         let final_style = match marker {
-            '+' => Style::default().fg(Color::Green),
-            '-' => Style::default().fg(Color::Red),
+            '+' => Style::default().fg(fg_color).bg(Color::Rgb(0, 64, 0)), // Dark green bg
+            '-' => Style::default().fg(fg_color).bg(Color::Rgb(64, 0, 0)), // Dark red bg
             _ => Style::default().fg(fg_color),
         };
 
