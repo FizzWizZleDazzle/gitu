@@ -1,7 +1,13 @@
 [package]
-name = "GitLogVisualizer"
+name = "gitu"
 version = "0.1.0"
 edition = "2021"
+authors = ["arturmisiurev@gmail.com"]
+description = "A blazingly fast TUI for Git with syntax highlighting, file-by-file diffs, and complete workflow management"
+repository = "https://github.com/FizzWizzleDazzle/gitu"
+license = "MIT"
+keywords = ["git", "tui", "terminal", "cli"]
+categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 ratatui = "0.29"

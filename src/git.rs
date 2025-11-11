@@ -24,6 +24,15 @@ pub struct StashEntry {
     pub message: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct Branch {
+    pub name: String,
+    pub is_current: bool,
+    pub is_remote: bool,
+    pub commit_hash: String,
+    pub commit_message: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Decoration {
     Head,
@@ -300,6 +309,36 @@ fn parse_commit_diff(output: &str) -> CommitDiff {
     }
 
     CommitDiff { files }
+}
+
+/// Get diff for a specific file
+pub fn get_file_diff(path: &str, staged: bool) -> Result<String> {
+    let mut args = vec!["diff"];
+
+    if staged {
+        args.push("--cached");
+    }
+
+    args.push("--");
+    args.push(path);
+
+    let output = Command::new("git")
+        .args(&args)
+        .output()
+        .context("Failed to execute git diff")?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Diff failed: {}", error);
+    }
+
+    let diff = String::from_utf8_lossy(&output.stdout).to_string();
+
+    if diff.is_empty() {
+        Ok("No changes to display".to_string())
+    } else {
+        Ok(diff)
+    }
 }
 
 /// Checkout a specific commit (detached HEAD state)
@@ -587,6 +626,38 @@ pub fn commit(message: &str) -> Result<String> {
     Ok("Committed successfully".to_string())
 }
 
+/// Create a stash
+pub fn create_stash(message: Option<&str>, include_untracked: bool) -> Result<String> {
+    let mut args = vec!["stash", "push"];
+
+    if include_untracked {
+        args.push("-u");
+    }
+
+    if let Some(msg) = message {
+        args.push("-m");
+        args.push(msg);
+    }
+
+    let output = Command::new("git")
+        .args(&args)
+        .output()
+        .context("Failed to execute git stash push")?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Stash creation failed: {}", error);
+    }
+
+    let msg = if let Some(m) = message {
+        format!("Created stash: {}", m)
+    } else {
+        "Created stash".to_string()
+    };
+
+    Ok(msg)
+}
+
 /// Apply a stash
 pub fn apply_stash(index: usize) -> Result<String> {
     let stash_ref = format!("stash@{{{}}}", index);
@@ -633,6 +704,200 @@ pub fn drop_stash(index: usize) -> Result<String> {
     }
 
     Ok(format!("Dropped stash@{{{}}}", index))
+}
+
+/// Get list of all branches (local and remote)
+pub fn get_branches() -> Result<Vec<Branch>> {
+    // Get local branches with -vv for detailed info
+    let output = Command::new("git")
+        .args(["branch", "-vv", "--no-color"])
+        .output()
+        .context("Failed to execute git branch")?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Branch listing failed: {}", error);
+    }
+
+    let local_output = String::from_utf8_lossy(&output.stdout);
+    let mut branches = parse_branch_output(&local_output, false);
+
+    // Get remote branches
+    let output = Command::new("git")
+        .args(["branch", "-r", "-v", "--no-color"])
+        .output()
+        .context("Failed to execute git branch -r")?;
+
+    if output.status.success() {
+        let remote_output = String::from_utf8_lossy(&output.stdout);
+        let mut remote_branches = parse_branch_output(&remote_output, true);
+        branches.append(&mut remote_branches);
+    }
+
+    Ok(branches)
+}
+
+fn parse_branch_output(output: &str, is_remote: bool) -> Vec<Branch> {
+    let mut branches = Vec::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.contains("HEAD ->") {
+            continue;
+        }
+
+        let is_current = line.starts_with('*');
+        let line_content = if is_current {
+            &line[2..]
+        } else {
+            &line[2..]
+        };
+
+        // Parse format: "branch_name hash commit message"
+        let parts: Vec<&str> = line_content.trim().splitn(3, ' ').collect();
+        if parts.len() >= 2 {
+            let name = parts[0].to_string();
+            let commit_hash = parts[1].to_string();
+            let commit_message = if parts.len() >= 3 {
+                parts[2].to_string()
+            } else {
+                String::new()
+            };
+
+            branches.push(Branch {
+                name,
+                is_current,
+                is_remote,
+                commit_hash,
+                commit_message,
+            });
+        }
+    }
+
+    branches
+}
+
+/// Switch to a branch
+pub fn switch_branch(name: &str) -> Result<String> {
+    // Remove "origin/" prefix if switching to remote branch
+    let branch_name = if name.starts_with("origin/") {
+        &name[7..]
+    } else {
+        name
+    };
+
+    let output = Command::new("git")
+        .args(["checkout", branch_name])
+        .output()
+        .context("Failed to execute git checkout")?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Branch switch failed: {}", error);
+    }
+
+    Ok(format!("Switched to branch '{}'", branch_name))
+}
+
+/// Delete a branch
+pub fn delete_branch(name: &str, force: bool) -> Result<String> {
+    let flag = if force { "-D" } else { "-d" };
+
+    let output = Command::new("git")
+        .args(["branch", flag, name])
+        .output()
+        .context("Failed to execute git branch -d")?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Branch deletion failed: {}", error);
+    }
+
+    Ok(format!("Deleted branch '{}'", name))
+}
+
+/// Create a new branch (but don't switch to it)
+pub fn create_new_branch(name: &str) -> Result<String> {
+    let output = Command::new("git")
+        .args(["branch", name])
+        .output()
+        .context("Failed to execute git branch")?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Branch creation failed: {}", error);
+    }
+
+    Ok(format!("Created branch '{}'", name))
+}
+
+/// Fetch from remote
+pub fn fetch() -> Result<String> {
+    let output = Command::new("git")
+        .args(["fetch"])
+        .output()
+        .context("Failed to execute git fetch")?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Fetch failed: {}", error);
+    }
+
+    Ok("Fetched from remote".to_string())
+}
+
+/// Push to remote
+pub fn push(force: bool) -> Result<String> {
+    let mut args = vec!["push"];
+
+    if force {
+        args.push("--force-with-lease");
+    }
+
+    let output = Command::new("git")
+        .args(&args)
+        .output()
+        .context("Failed to execute git push")?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Push failed: {}", error);
+    }
+
+    let msg = if force {
+        "Force pushed to remote"
+    } else {
+        "Pushed to remote"
+    };
+
+    Ok(msg.to_string())
+}
+
+/// Pull from remote
+pub fn pull(rebase: bool) -> Result<String> {
+    let mut args = vec!["pull"];
+
+    if rebase {
+        args.push("--rebase");
+    }
+
+    let output = Command::new("git")
+        .args(&args)
+        .output()
+        .context("Failed to execute git pull")?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Pull failed: {}", error);
+    }
+
+    let msg = if rebase {
+        "Pulled with rebase from remote"
+    } else {
+        "Pulled from remote"
+    };
+
+    Ok(msg.to_string())
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use crate::git::{get_commit_diff, get_commits, Commit, CommitDiff, Decoration, SearchFilter, StatusFile, StashEntry};
+use crate::git::{get_commit_diff, get_commits, Branch, Commit, CommitDiff, Decoration, SearchFilter, StatusFile, StashEntry};
 use crate::syntax;
 use anyhow::Result;
 use ratatui::{
@@ -14,6 +14,7 @@ pub enum Panel {
     Status,
     Log,
     Stash,
+    Branches,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -45,10 +46,21 @@ pub struct App {
     pub status_list_state: ListState,
     pub commit_message_mode: bool,
     pub commit_message_input: String,
+    pub status_show_diff: bool,
+    pub status_diff_content: Option<String>,
+    pub status_diff_scroll: u16,
 
     // Stash panel
     pub stashes: Vec<StashEntry>,
     pub stash_list_state: ListState,
+    pub stash_input_mode: bool,
+    pub stash_message_input: String,
+
+    // Branches panel
+    pub branches: Vec<Branch>,
+    pub branch_list_state: ListState,
+    pub new_branch_input_mode: bool,
+    pub new_branch_name_input: String,
 
     // Common
     pub should_quit: bool,
@@ -65,9 +77,10 @@ impl App {
             list_state.select(Some(0));
         }
 
-        // Try to load status and stash data
+        // Try to load status, stash, and branch data
         let status_files = crate::git::get_status().unwrap_or_default();
         let stashes = crate::git::get_stashes().unwrap_or_default();
+        let branches = crate::git::get_branches().unwrap_or_default();
 
         let mut status_list_state = ListState::default();
         if !status_files.is_empty() {
@@ -77,6 +90,11 @@ impl App {
         let mut stash_list_state = ListState::default();
         if !stashes.is_empty() {
             stash_list_state.select(Some(0));
+        }
+
+        let mut branch_list_state = ListState::default();
+        if !branches.is_empty() {
+            branch_list_state.select(Some(0));
         }
 
         Self {
@@ -100,10 +118,21 @@ impl App {
             status_list_state,
             commit_message_mode: false,
             commit_message_input: String::new(),
+            status_show_diff: false,
+            status_diff_content: None,
+            status_diff_scroll: 0,
 
             // Stash panel
             stashes,
             stash_list_state,
+            stash_input_mode: false,
+            stash_message_input: String::new(),
+
+            // Branches panel
+            branches,
+            branch_list_state,
+            new_branch_input_mode: false,
+            new_branch_name_input: String::new(),
 
             // Common
             should_quit: false,
@@ -625,6 +654,38 @@ impl App {
         }
     }
 
+    pub fn toggle_status_diff(&mut self) {
+        self.status_show_diff = !self.status_show_diff;
+
+        if self.status_show_diff {
+            // Load diff for selected file
+            if let Some(index) = self.status_list_state.selected() {
+                if let Some(file) = self.status_files.get(index) {
+                    match crate::git::get_file_diff(&file.path, file.staged) {
+                        Ok(diff) => self.status_diff_content = Some(diff),
+                        Err(e) => {
+                            self.set_status(format!("Failed to load diff: {}", e), MessageType::Error);
+                            self.status_show_diff = false;
+                        }
+                    }
+                }
+            }
+        } else {
+            self.status_diff_content = None;
+            self.status_diff_scroll = 0;
+        }
+    }
+
+    pub fn scroll_status_diff_up(&mut self) {
+        if self.status_diff_scroll > 0 {
+            self.status_diff_scroll -= 1;
+        }
+    }
+
+    pub fn scroll_status_diff_down(&mut self) {
+        self.status_diff_scroll += 1;
+    }
+
     // Stash panel operations
     pub fn next_stash(&mut self) {
         if self.stashes.is_empty() {
@@ -692,12 +753,199 @@ impl App {
             }
         }
     }
+
+    // Stash creation methods
+    pub fn enter_stash_input_mode(&mut self) {
+        self.stash_input_mode = true;
+        self.stash_message_input.clear();
+    }
+
+    pub fn exit_stash_input_mode(&mut self) {
+        self.stash_input_mode = false;
+    }
+
+    pub fn add_stash_char(&mut self, c: char) {
+        self.stash_message_input.push(c);
+    }
+
+    pub fn delete_stash_char(&mut self) {
+        self.stash_message_input.pop();
+    }
+
+    pub fn execute_create_stash(&mut self) {
+        let message = if self.stash_message_input.is_empty() {
+            None
+        } else {
+            Some(self.stash_message_input.as_str())
+        };
+
+        match crate::git::create_stash(message, false) {
+            Ok(msg) => {
+                self.set_status(msg, MessageType::Success);
+                self.stash_input_mode = false;
+                self.refresh_status();
+                self.refresh_stashes();
+            }
+            Err(e) => {
+                self.set_status(format!("Error: {}", e), MessageType::Error);
+                self.stash_input_mode = false;
+            }
+        }
+    }
+
+    // Branches panel operations
+    pub fn refresh_branches(&mut self) {
+        match crate::git::get_branches() {
+            Ok(branches) => {
+                self.branches = branches;
+                let mut state = ListState::default();
+                if !self.branches.is_empty() {
+                    state.select(Some(0));
+                }
+                self.branch_list_state = state;
+            }
+            Err(e) => self.set_status(format!("Failed to refresh branches: {}", e), MessageType::Error),
+        }
+    }
+
+    pub fn next_branch(&mut self) {
+        if self.branches.is_empty() {
+            return;
+        }
+        let i = match self.branch_list_state.selected() {
+            Some(i) if i >= self.branches.len() - 1 => 0,
+            Some(i) => i + 1,
+            None => 0,
+        };
+        self.branch_list_state.select(Some(i));
+    }
+
+    pub fn previous_branch(&mut self) {
+        if self.branches.is_empty() {
+            return;
+        }
+        let i = match self.branch_list_state.selected() {
+            Some(i) if i == 0 => self.branches.len() - 1,
+            Some(i) => i - 1,
+            None => 0,
+        };
+        self.branch_list_state.select(Some(i));
+    }
+
+    pub fn switch_to_selected_branch(&mut self) {
+        if let Some(index) = self.branch_list_state.selected() {
+            if let Some(branch) = self.branches.get(index) {
+                if branch.is_current {
+                    self.set_status("Already on this branch".to_string(), MessageType::Info);
+                    return;
+                }
+
+                match crate::git::switch_branch(&branch.name) {
+                    Ok(msg) => {
+                        self.set_status(msg, MessageType::Success);
+                        self.refresh_branches();
+                    }
+                    Err(e) => self.set_status(format!("Error: {}", e), MessageType::Error),
+                }
+            }
+        }
+    }
+
+    pub fn delete_selected_branch(&mut self) {
+        if let Some(index) = self.branch_list_state.selected() {
+            if let Some(branch) = self.branches.get(index) {
+                if branch.is_current {
+                    self.set_status("Cannot delete current branch".to_string(), MessageType::Error);
+                    return;
+                }
+
+                if branch.is_remote {
+                    self.set_status("Cannot delete remote branches from this view".to_string(), MessageType::Error);
+                    return;
+                }
+
+                match crate::git::delete_branch(&branch.name, false) {
+                    Ok(msg) => {
+                        self.set_status(msg, MessageType::Success);
+                        self.refresh_branches();
+                    }
+                    Err(e) => self.set_status(format!("Error: {}", e), MessageType::Error),
+                }
+            }
+        }
+    }
+
+    pub fn enter_new_branch_mode(&mut self) {
+        self.new_branch_input_mode = true;
+        self.new_branch_name_input.clear();
+    }
+
+    pub fn exit_new_branch_mode(&mut self) {
+        self.new_branch_input_mode = false;
+    }
+
+    pub fn add_new_branch_char(&mut self, c: char) {
+        self.new_branch_name_input.push(c);
+    }
+
+    pub fn delete_new_branch_char(&mut self) {
+        self.new_branch_name_input.pop();
+    }
+
+    pub fn execute_create_new_branch(&mut self) {
+        if self.new_branch_name_input.is_empty() {
+            self.set_status("Branch name cannot be empty".to_string(), MessageType::Error);
+            self.new_branch_input_mode = false;
+            return;
+        }
+
+        match crate::git::create_new_branch(&self.new_branch_name_input) {
+            Ok(msg) => {
+                self.set_status(msg, MessageType::Success);
+                self.new_branch_input_mode = false;
+                self.refresh_branches();
+            }
+            Err(e) => {
+                self.set_status(format!("Error: {}", e), MessageType::Error);
+                self.new_branch_input_mode = false;
+            }
+        }
+    }
+
+    // Remote operations
+    pub fn fetch_from_remote(&mut self) {
+        match crate::git::fetch() {
+            Ok(msg) => {
+                self.set_status(msg, MessageType::Success);
+                self.refresh_branches();
+            }
+            Err(e) => self.set_status(format!("Error: {}", e), MessageType::Error),
+        }
+    }
+
+    pub fn push_to_remote(&mut self) {
+        match crate::git::push(false) {
+            Ok(msg) => self.set_status(msg, MessageType::Success),
+            Err(e) => self.set_status(format!("Error: {}", e), MessageType::Error),
+        }
+    }
+
+    pub fn pull_from_remote(&mut self) {
+        match crate::git::pull(false) {
+            Ok(msg) => {
+                self.set_status(msg, MessageType::Success);
+                self.refresh_status();
+                self.refresh_branches();
+            }
+            Err(e) => self.set_status(format!("Error: {}", e), MessageType::Error),
+        }
+    }
 }
 
 pub fn ui(f: &mut Frame, app: &mut App) {
     // Calculate constraints based on what needs to be shown
     let has_status_msg = app.status_message.is_some();
-    let has_input = app.search_mode || app.branch_input_mode || app.commit_message_mode;
+    let has_input = app.search_mode || app.branch_input_mode || app.commit_message_mode || app.stash_input_mode || app.new_branch_input_mode;
 
     let mut constraints = vec![];
     if has_status_msg {
@@ -747,6 +995,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         Panel::Status => render_status_panel(f, app, main_area),
         Panel::Log => render_log_panel(f, app, main_area),
         Panel::Stash => render_stash_panel(f, app, main_area),
+        Panel::Branches => render_branches_panel(f, app, main_area),
     }
 
     // Render input prompts
@@ -757,6 +1006,10 @@ pub fn ui(f: &mut Frame, app: &mut App) {
             render_branch_input(f, app, input_rect);
         } else if app.commit_message_mode {
             render_commit_message_input(f, app, input_rect);
+        } else if app.stash_input_mode {
+            render_stash_input(f, app, input_rect);
+        } else if app.new_branch_input_mode {
+            render_new_branch_input(f, app, input_rect);
         }
     }
 }
@@ -766,6 +1019,7 @@ fn render_tab_bar(f: &mut Frame, app: &App, area: Rect) {
         ("[1] Status", Panel::Status),
         ("[2] Log", Panel::Log),
         ("[3] Stash", Panel::Stash),
+        ("[4] Branches", Panel::Branches),
     ];
 
     let mut spans = Vec::new();
@@ -791,6 +1045,19 @@ fn render_tab_bar(f: &mut Frame, app: &App, area: Rect) {
 }
 
 fn render_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    // Split area if showing diff
+    let chunks = if app.status_show_diff {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .split(area)
+    } else {
+        Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(100)])
+            .split(area)
+    };
+
     let (staged, unstaged): (Vec<&StatusFile>, Vec<&StatusFile>) =
         app.status_files.iter().partition(|f| f.staged);
 
@@ -855,7 +1122,11 @@ fn render_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
     };
 
     let title = format!(" Status ({} files) ", app.status_files.len());
-    let help = " Space: Stage/Unstage | a: Stage all | u: Unstage all | c: Commit | q: Quit ";
+    let help = if app.status_show_diff {
+        " j/k: Scroll diff | Enter: Hide diff | Space: Stage/Unstage "
+    } else {
+        " Space: Stage/Unstage | a: Stage all | u: Unstage all | c: Commit | s: Stash | Enter: Show diff "
+    };
 
     let list = List::new(items)
         .block(
@@ -871,7 +1142,36 @@ fn render_status_panel(f: &mut Frame, app: &mut App, area: Rect) {
         )
         .highlight_symbol(">> ");
 
-    f.render_stateful_widget(list, area, &mut app.status_list_state);
+    f.render_stateful_widget(list, chunks[0], &mut app.status_list_state);
+
+    // Render diff if showing
+    if app.status_show_diff && chunks.len() > 1 {
+        if let Some(ref diff_content) = app.status_diff_content {
+            let selected_file = app.status_list_state.selected()
+                .and_then(|i| app.status_files.get(i));
+
+            let filename = selected_file
+                .map(|f| f.path.as_str())
+                .unwrap_or("unknown");
+
+            let lines = crate::syntax::highlight_diff(diff_content, filename);
+
+            let visible_lines: Vec<Line> = lines
+                .into_iter()
+                .skip(app.status_diff_scroll as usize)
+                .collect();
+
+            let paragraph = Paragraph::new(visible_lines)
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(format!(" Diff: {} ", filename)),
+                )
+                .wrap(ratatui::widgets::Wrap { trim: false });
+
+            f.render_widget(paragraph, chunks[1]);
+        }
+    }
 }
 
 fn render_log_panel(f: &mut Frame, app: &mut App, area: Rect) {
@@ -954,6 +1254,104 @@ fn render_stash_panel(f: &mut Frame, app: &mut App, area: Rect) {
         .highlight_symbol(">> ");
 
     f.render_stateful_widget(list, area, &mut app.stash_list_state);
+}
+
+fn render_branches_panel(f: &mut Frame, app: &mut App, area: Rect) {
+    let (local, remote): (Vec<&Branch>, Vec<&Branch>) =
+        app.branches.iter().partition(|b| !b.is_remote);
+
+    let items: Vec<ListItem> = {
+        let mut items = Vec::new();
+
+        if !local.is_empty() {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "Local Branches:",
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ))));
+
+            for branch in &local {
+                let mut spans = vec![];
+
+                if branch.is_current {
+                    spans.push(Span::styled("* ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+                } else {
+                    spans.push(Span::raw("  "));
+                }
+
+                spans.push(Span::styled(
+                    &branch.name,
+                    if branch.is_current {
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    },
+                ));
+
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(
+                    &branch.commit_hash[..7.min(branch.commit_hash.len())],
+                    Style::default().fg(Color::Yellow),
+                ));
+
+                if !branch.commit_message.is_empty() {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(&branch.commit_message, Style::default().fg(Color::Gray)));
+                }
+
+                items.push(ListItem::new(Line::from(spans)));
+            }
+        }
+
+        if !remote.is_empty() {
+            items.push(ListItem::new(Line::from(Span::styled(
+                "Remote Branches:",
+                Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
+            ))));
+
+            for branch in &remote {
+                let mut spans = vec![Span::raw("  ")];
+
+                spans.push(Span::styled(&branch.name, Style::default().fg(Color::Blue)));
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(
+                    &branch.commit_hash[..7.min(branch.commit_hash.len())],
+                    Style::default().fg(Color::Yellow),
+                ));
+
+                if !branch.commit_message.is_empty() {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(&branch.commit_message, Style::default().fg(Color::Gray)));
+                }
+
+                items.push(ListItem::new(Line::from(spans)));
+            }
+        }
+
+        if items.is_empty() {
+            items.push(ListItem::new("No branches"));
+        }
+
+        items
+    };
+
+    let title = format!(" Branches ({}) ", app.branches.len());
+    let help = " Enter: Switch | d: Delete | n: New branch | q: Quit ";
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(title)
+                .title_bottom(help),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol(">> ");
+
+    f.render_stateful_widget(list, area, &mut app.branch_list_state);
 }
 
 fn render_commit_list(f: &mut Frame, app: &mut App, area: Rect) {
@@ -1202,6 +1600,62 @@ fn render_commit_message_input(f: &mut Frame, app: &App, area: Rect) {
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Commit Message ")
+                .title_bottom(help)
+                .border_style(Style::default().fg(Color::Green)),
+        );
+
+    f.render_widget(paragraph, area);
+}
+
+fn render_stash_input(f: &mut Frame, app: &App, area: Rect) {
+    let help = " Type stash message (optional) | Enter: Create stash | Esc: Cancel ";
+
+    let input_text = if app.stash_message_input.is_empty() {
+        "Enter stash message (optional)...".to_string()
+    } else {
+        app.stash_message_input.clone()
+    };
+
+    let input_style = if app.stash_message_input.is_empty() {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let paragraph = Paragraph::new(input_text)
+        .style(input_style)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Stash Message ")
+                .title_bottom(help)
+                .border_style(Style::default().fg(Color::Magenta)),
+        );
+
+    f.render_widget(paragraph, area);
+}
+
+fn render_new_branch_input(f: &mut Frame, app: &App, area: Rect) {
+    let help = " Type branch name | Enter: Create | Esc: Cancel ";
+
+    let input_text = if app.new_branch_name_input.is_empty() {
+        "Enter new branch name...".to_string()
+    } else {
+        app.new_branch_name_input.clone()
+    };
+
+    let input_style = if app.new_branch_name_input.is_empty() {
+        Style::default().fg(Color::DarkGray)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let paragraph = Paragraph::new(input_text)
+        .style(input_style)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" New Branch ")
                 .title_bottom(help)
                 .border_style(Style::default().fg(Color::Green)),
         );

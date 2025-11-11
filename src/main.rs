@@ -91,6 +91,22 @@ fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Char(c) => app.add_commit_char(c),
                         _ => {}
                     }
+                } else if app.stash_input_mode {
+                    match key.code {
+                        KeyCode::Esc => app.exit_stash_input_mode(),
+                        KeyCode::Enter => app.execute_create_stash(),
+                        KeyCode::Backspace => app.delete_stash_char(),
+                        KeyCode::Char(c) => app.add_stash_char(c),
+                        _ => {}
+                    }
+                } else if app.new_branch_input_mode {
+                    match key.code {
+                        KeyCode::Esc => app.exit_new_branch_mode(),
+                        KeyCode::Enter => app.execute_create_new_branch(),
+                        KeyCode::Backspace => app.delete_new_branch_char(),
+                        KeyCode::Char(c) => app.add_new_branch_char(c),
+                        _ => {}
+                    }
                 } else if app.tree_view_mode {
                     // Tree view mode
                     match key.code {
@@ -124,6 +140,7 @@ fn run_app<B: ratatui::backend::Backend>(
                         KeyCode::Char('1') => app.switch_to_panel(Panel::Status),
                         KeyCode::Char('2') => app.switch_to_panel(Panel::Log),
                         KeyCode::Char('3') => app.switch_to_panel(Panel::Stash),
+                        KeyCode::Char('4') => app.switch_to_panel(Panel::Branches),
                         KeyCode::Esc => {
                             if app.status_message.is_some() {
                                 app.clear_status();
@@ -142,8 +159,22 @@ fn run_app<B: ratatui::backend::Backend>(
                                         KeyCode::Char('a') => app.stage_all_files(),
                                         KeyCode::Char('u') => app.unstage_all_files(),
                                         KeyCode::Char('c') => app.enter_commit_message_mode(),
-                                        KeyCode::Down | KeyCode::Char('j') => app.next_status_file(),
-                                        KeyCode::Up | KeyCode::Char('k') => app.previous_status_file(),
+                                        KeyCode::Char('s') => app.enter_stash_input_mode(),
+                                        KeyCode::Enter => app.toggle_status_diff(),
+                                        KeyCode::Down | KeyCode::Char('j') => {
+                                            if app.status_show_diff {
+                                                app.scroll_status_diff_down();
+                                            } else {
+                                                app.next_status_file();
+                                            }
+                                        }
+                                        KeyCode::Up | KeyCode::Char('k') => {
+                                            if app.status_show_diff {
+                                                app.scroll_status_diff_up();
+                                            } else {
+                                                app.previous_status_file();
+                                            }
+                                        }
                                         _ => {}
                                     }
                                 }
@@ -165,6 +196,15 @@ fn run_app<B: ratatui::backend::Backend>(
                                         }
                                         KeyCode::Char('r') => {
                                             app.revert_selected_commit();
+                                        }
+                                        KeyCode::Char('f') => {
+                                            app.fetch_from_remote();
+                                        }
+                                        KeyCode::Char('P') => {
+                                            app.push_to_remote();
+                                        }
+                                        KeyCode::Char('U') => {
+                                            app.pull_from_remote();
                                         }
                                         KeyCode::Down | KeyCode::Char('j') => {
                                             if app.show_diff {
@@ -201,6 +241,16 @@ fn run_app<B: ratatui::backend::Backend>(
                                         KeyCode::Char('d') => app.drop_selected_stash(),
                                         KeyCode::Down | KeyCode::Char('j') => app.next_stash(),
                                         KeyCode::Up | KeyCode::Char('k') => app.previous_stash(),
+                                        _ => {}
+                                    }
+                                }
+                                Panel::Branches => {
+                                    match key.code {
+                                        KeyCode::Enter => app.switch_to_selected_branch(),
+                                        KeyCode::Char('d') => app.delete_selected_branch(),
+                                        KeyCode::Char('n') => app.enter_new_branch_mode(),
+                                        KeyCode::Down | KeyCode::Char('j') => app.next_branch(),
+                                        KeyCode::Up | KeyCode::Char('k') => app.previous_branch(),
                                         _ => {}
                                     }
                                 }
