@@ -194,9 +194,9 @@ fn parse_decoration_string(decoration_str: &str) -> Vec<Decoration> {
         }
 
         // Handle "HEAD -> branch" format
-        if part.starts_with("HEAD -> ") {
+        if let Some(rest) = part.strip_prefix("HEAD -> ") {
             decorations.push(Decoration::Head);
-            let branch = part[8..].trim(); // Skip "HEAD -> "
+            let branch = rest.trim();
             if !branch.is_empty() {
                 if branch.contains('/') {
                     decorations.push(Decoration::RemoteBranch(branch.to_string()));
@@ -210,8 +210,8 @@ fn parse_decoration_string(decoration_str: &str) -> Vec<Decoration> {
             decorations.push(Decoration::Head);
         }
         // Handle "tag: name" format
-        else if part.starts_with("tag: ") {
-            let tag_name = part[5..].trim(); // Skip "tag: "
+        else if let Some(rest) = part.strip_prefix("tag: ") {
+            let tag_name = rest.trim();
             if !tag_name.is_empty() {
                 decorations.push(Decoration::Tag(tag_name.to_string()));
             }
@@ -383,9 +383,7 @@ pub fn cherry_pick(hash: &str) -> Result<String> {
 
         // Check if it's a conflict
         if error.contains("conflict") || error.contains("CONFLICT") {
-            return Ok(format!(
-                "Cherry-pick has conflicts. Resolve them and run 'git cherry-pick --continue'"
-            ));
+            return Ok("Cherry-pick has conflicts. Resolve them and run 'git cherry-pick --continue'".to_string());
         }
 
         anyhow::bail!("Cherry-pick failed: {}", error);
@@ -406,9 +404,7 @@ pub fn revert_commit(hash: &str) -> Result<String> {
 
         // Check if it's a conflict
         if error.contains("conflict") || error.contains("CONFLICT") {
-            return Ok(format!(
-                "Revert has conflicts. Resolve them and run 'git revert --continue'"
-            ));
+            return Ok("Revert has conflicts. Resolve them and run 'git revert --continue'".to_string());
         }
 
         anyhow::bail!("Revert failed: {}", error);
@@ -521,16 +517,14 @@ fn parse_stash_output(output: &str) -> Vec<StashEntry> {
         }
 
         let rest = parts[1].trim();
-        let (branch, message) = if rest.starts_with("WIP on ") {
-            let rest = &rest[7..];
+        let (branch, message) = if let Some(rest) = rest.strip_prefix("WIP on ") {
             let parts: Vec<&str> = rest.splitn(2, ':').collect();
             if parts.len() == 2 {
                 (parts[0].trim().to_string(), parts[1].trim().to_string())
             } else {
                 ("unknown".to_string(), rest.to_string())
             }
-        } else if rest.starts_with("On ") {
-            let rest = &rest[3..];
+        } else if let Some(rest) = rest.strip_prefix("On ") {
             let parts: Vec<&str> = rest.splitn(2, ':').collect();
             if parts.len() == 2 {
                 (parts[0].trim().to_string(), parts[1].trim().to_string())
@@ -747,11 +741,7 @@ fn parse_branch_output(output: &str, is_remote: bool) -> Vec<Branch> {
         }
 
         let is_current = line.starts_with('*');
-        let line_content = if is_current {
-            &line[2..]
-        } else {
-            &line[2..]
-        };
+        let line_content = &line[2..];
 
         // Parse format: "branch_name hash commit message"
         let parts: Vec<&str> = line_content.trim().splitn(3, ' ').collect();
@@ -780,11 +770,7 @@ fn parse_branch_output(output: &str, is_remote: bool) -> Vec<Branch> {
 /// Switch to a branch
 pub fn switch_branch(name: &str) -> Result<String> {
     // Remove "origin/" prefix if switching to remote branch
-    let branch_name = if name.starts_with("origin/") {
-        &name[7..]
-    } else {
-        name
-    };
+    let branch_name = name.strip_prefix("origin/").unwrap_or(name);
 
     let output = Command::new("git")
         .args(["checkout", branch_name])
@@ -871,6 +857,71 @@ pub fn push(force: bool) -> Result<String> {
     };
 
     Ok(msg.to_string())
+}
+
+/// Get the last commit message (for amend)
+pub fn get_last_commit_message() -> Result<String> {
+    let output = Command::new("git")
+        .args(["log", "-1", "--format=%s"])
+        .output()
+        .context("Failed to execute git log")?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Failed to get last commit message: {}", error);
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Commit with amend
+pub fn commit_amend(message: &str) -> Result<String> {
+    let output = Command::new("git")
+        .args(["commit", "--amend", "-m", message])
+        .output()
+        .context("Failed to execute git commit --amend")?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Amend failed: {}", error);
+    }
+
+    Ok("Amended commit successfully".to_string())
+}
+
+/// Discard changes in a file (git checkout -- <path>)
+pub fn discard_file(path: &str) -> Result<String> {
+    let output = Command::new("git")
+        .args(["checkout", "--", path])
+        .output()
+        .context("Failed to execute git checkout")?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Discard failed: {}", error);
+    }
+
+    Ok(format!("Discarded changes in {}", path))
+}
+
+/// Merge a branch into the current branch
+pub fn merge_branch(name: &str) -> Result<String> {
+    let output = Command::new("git")
+        .args(["merge", name])
+        .output()
+        .context("Failed to execute git merge")?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+
+        if error.contains("conflict") || error.contains("CONFLICT") {
+            return Ok("Merge has conflicts. Resolve them and run 'git merge --continue'".to_string());
+        }
+
+        anyhow::bail!("Merge failed: {}", error);
+    }
+
+    Ok(format!("Merged branch '{}' into current branch", name))
 }
 
 /// Pull from remote

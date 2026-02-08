@@ -1,0 +1,26 @@
+{
+  "name": "gitu-git",
+  "version": "0.0.0",
+  "description": "A blazingly fast TUI for Git with syntax highlighting, file-by-file diffs, and complete workflow management",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FizzWizzleDazzle/gitu"
+  },
+  "keywords": [
+    "git",
+    "tui",
+    "terminal",
+    "cli"
+  ],
+  "bin": {
+    "gitu": "./bin/gitu"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "files": [
+    "bin/",
+    "install.js"
+  ]
+}

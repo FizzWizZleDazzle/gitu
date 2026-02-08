@@ -66,17 +66,15 @@ pub fn highlight_diff(diff_content: &str, filename: &str) -> Vec<Line<'static>> 
         let highlighted_line = if line.starts_with("@@") {
             // Hunk header - show in cyan
             Line::from(Span::styled(line.to_string(), Style::default().fg(Color::Cyan)))
-        } else if line.starts_with('+') {
+        } else if let Some(code) = line.strip_prefix('+') {
             // Addition - apply syntax highlighting then overlay green
-            let code = &line[1..]; // Remove the '+'
             highlight_line_with_diff_marker(code, &mut highlighter, '+')
-        } else if line.starts_with('-') {
+        } else if let Some(code) = line.strip_prefix('-') {
             // Deletion - apply syntax highlighting then overlay red
-            let code = &line[1..]; // Remove the '-'
             highlight_line_with_diff_marker(code, &mut highlighter, '-')
         } else if line.starts_with(' ') || line.is_empty() {
             // Context line - apply syntax highlighting
-            let code = if line.is_empty() { "" } else { &line[1..] };
+            let code = line.strip_prefix(' ').unwrap_or("");
             highlight_line_with_diff_marker(code, &mut highlighter, ' ')
         } else {
             // Other metadata (shouldn't happen with our parser, but handle it)
