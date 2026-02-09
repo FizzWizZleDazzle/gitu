@@ -12,7 +12,7 @@ A fast terminal UI for Git with syntax highlighting and complete workflow manage
 curl -sSL https://raw.githubusercontent.com/FizzWizzleDazzle/gitu/master/install.sh | sh
 ```
 
-Or download manually from the [Releases page](https://github.com/FizzWizzleDazzle/gitu/releases).
+Or download manually from the [Releases page](https://github.com/FizzWizzleDazzle/gitu/releases) (**Windows Version**).
 
 ### Cargo
 
