@@ -99,27 +99,3 @@ jobs:
           generate_release_notes: true
           files: artifacts/**/*
 
-  publish-npm:
-    name: Publish npm package
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          registry-url: https://registry.npmjs.org
-
-      - name: Set package version from tag
-        run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          cd npm
-          node -e "const p=require('./package.json'); p.version='$VERSION'; require('fs').writeFileSync('package.json', JSON.stringify(p, null, 2)+'\n')"
-
-      - name: Publish to npm
-        run: npm publish
-        working-directory: npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -6,11 +6,13 @@ A fast terminal UI for Git with syntax highlighting and complete workflow manage
 
 ## Installation
 
-### npm (recommended)
+### Quick install (Linux/macOS)
 
 ```bash
-npm install -g gitu-git
+curl -sSL https://raw.githubusercontent.com/FizzWizzleDazzle/gitu/master/install.sh | sh
 ```
+
+Or download manually from the [Releases page](https://github.com/FizzWizzleDazzle/gitu/releases).
 
 ### Cargo
 
@@ -25,10 +27,6 @@ git clone https://github.com/FizzWizzleDazzle/gitu.git
 cd gitu
 cargo install --path .
 ```
-
-### GitHub Releases
-
-Download pre-built binaries from the [Releases page](https://github.com/FizzWizzleDazzle/gitu/releases).
 
 ## Features
 
